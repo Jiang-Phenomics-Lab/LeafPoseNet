@@ -5,6 +5,13 @@
 - To reduce the effects of minor annotation errors on model training when using discrete keypoints as targets, we transformed keypoint prediction into a heatmap regression task. 
 
 
+## Installation
+
+### Clone the Repository: 
+```
+git clone https://github.com/Jiang-Phenomics-Lab/LANet.git
+cd LANet
+```
 
 ## Requirements
 Install dependencies using pip
