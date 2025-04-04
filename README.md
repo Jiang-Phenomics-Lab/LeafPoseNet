@@ -32,8 +32,6 @@ python predict.py
 ## Phenotyping:
 The phenotyping method is in the `phenotypying.ipynb` 
 
-Green leaves and yellow leaves segmentation
-![LeavesSeg](./assets/seg.gif)
 
 
 
