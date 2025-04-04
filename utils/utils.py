@@ -4,25 +4,347 @@ import time
 
 import torch
 import numpy as np
-#import transforms_higherHRnet as transforms
-import transforms  #Litepose和LAnet使用transforms
-#import transforms_LightOpenPose as transforms  #LightOpenPose使用transforms_LightOpenPose
-import train_utils.distributed_utils as utils
-from .coco_eval import EvalCOCOMetric
-from .loss import KpLoss_for_val
-from .loss import KpLoss_for_train
+import utils.transforms as transforms 
 import pandas as pd
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+from collections import defaultdict, deque
+import datetime
+import time
+import errno
+import os
+
+import torch
+import torch.distributed as dist
+
+class KpLoss_for_val(object):
+    def __init__(self):
+        self.criterion = torch.nn.MSELoss(reduction='none')
+
+    def __call__(self, logits, targets):
+        assert len(logits.shape) == 4, 'logits should be 4-ndim'
+        device = logits.device
+        bs = logits.shape[0]
+        heatmaps = torch.stack([t["heatmap"].to(device) for t in targets])
+        loss1 = self.criterion(logits, heatmaps).mean(dim=[2, 3])
+        loss1 = torch.sum(loss1) / bs
+
+        return loss1
+class KpLoss_for_train(object):
+    def __init__(self):
+        self.criterion = torch.nn.MSELoss(reduction='none')
+
+    def __call__(self, logits, targets):
+        assert len(logits.shape) == 4, 'logits should be 4-ndim'
+        device = logits.device
+        bs = logits.shape[0]
+
+        heatmaps = torch.stack([t["heatmap"].to(device) for t in targets])
+
+
+        loss1 = self.criterion(logits, heatmaps).mean(dim=[2, 3])
+
+
+        loss1 = torch.sum(loss1) / bs
+
+        return loss1
+
+class SmoothedValue(object):
+    """Track a series of values and provide access to smoothed values over a
+    window or the global series average.
+    """
+    def __init__(self, window_size=20, fmt=None):
+        if fmt is None:
+            fmt = "{value:.4f} ({global_avg:.4f})"
+        self.deque = deque(maxlen=window_size)  # deque简单理解成加强版list
+        self.total = 0.0
+        self.count = 0
+        self.fmt = fmt
+
+    def update(self, value, n=1):
+        self.deque.append(value)
+        self.count += n
+        self.total += value * n
+
+    def synchronize_between_processes(self):
+        """
+        Warning: does not synchronize the deque!
+        """
+        if not is_dist_avail_and_initialized():
+            return
+        t = torch.tensor([self.count, self.total], dtype=torch.float64, device="cuda")
+        dist.barrier()
+        dist.all_reduce(t)
+        t = t.tolist()
+        self.count = int(t[0])
+        self.total = t[1]
+
+    @property
+    def median(self):  # @property 是装饰器，这里可简单理解为增加median属性(只读)
+        d = torch.tensor(list(self.deque))
+        return d.median().item()
+
+    @property
+    def avg(self):
+        d = torch.tensor(list(self.deque), dtype=torch.float32)
+        return d.mean().item()
+
+    @property
+    def global_avg(self):
+        return self.total / self.count
+
+    @property
+    def max(self):
+        return max(self.deque)
+
+    @property
+    def value(self):
+        return self.deque[-1]
+
+    def __str__(self):
+        return self.fmt.format(
+            median=self.median,
+            avg=self.avg,
+            global_avg=self.global_avg,
+            max=self.max,
+            value=self.value)
+
+
+def all_gather(data):
+    """
+    收集各个进程中的数据
+    Run all_gather on arbitrary picklable data (not necessarily tensors)
+    Args:
+        data: any picklable object
+    Returns:
+        list[data]: list of data gathered from each rank
+    """
+    world_size = get_world_size()  
+    if world_size == 1:
+        return [data]
+
+    data_list = [None] * world_size
+    dist.all_gather_object(data_list, data)
+
+    return data_list
+
+
+def reduce_dict(input_dict, average=True):
+    """
+    Args:
+        input_dict (dict): all the values will be reduced
+        average (bool): whether to do average or sum
+    Reduce the values in the dictionary from all processes so that all processes
+    have the averaged results. Returns a dict with the same fields as
+    input_dict, after reduction.
+    """
+    world_size = get_world_size()
+    if world_size < 2: 
+        return input_dict
+    with torch.no_grad(): 
+        names = []
+        values = []
+        # sort the keys so that they are consistent across processes
+        for k in sorted(input_dict.keys()):
+            names.append(k)
+            values.append(input_dict[k])
+        values = torch.stack(values, dim=0)
+        dist.all_reduce(values)
+        if average:
+            values /= world_size
+
+        reduced_dict = {k: v for k, v in zip(names, values)}
+        return reduced_dict
+
+
+class MetricLogger(object):
+    def __init__(self, delimiter="\t"):
+        self.meters = defaultdict(SmoothedValue)
+        self.delimiter = delimiter
+
+    def update(self, **kwargs):
+        for k, v in kwargs.items():
+            if isinstance(v, torch.Tensor):
+                v = v.item()
+            assert isinstance(v, (float, int))
+            self.meters[k].update(v)
+
+    def __getattr__(self, attr):
+        if attr in self.meters:
+            return self.meters[attr]
+        if attr in self.__dict__:
+            return self.__dict__[attr]
+        raise AttributeError("'{}' object has no attribute '{}'".format(
+            type(self).__name__, attr))
+
+    def __str__(self):
+        loss_str = []
+        for name, meter in self.meters.items():
+            loss_str.append(
+                "{}: {}".format(name, str(meter))
+            )
+        return self.delimiter.join(loss_str)
+
+    def synchronize_between_processes(self):
+        for meter in self.meters.values():
+            meter.synchronize_between_processes()
+
+    def add_meter(self, name, meter):
+        self.meters[name] = meter
+
+    def log_every(self, iterable, print_freq, header=None):
+        i = 0
+        if not header:
+            header = ""
+        start_time = time.time()
+        end = time.time()
+        iter_time = SmoothedValue(fmt='{avg:.4f}')
+        data_time = SmoothedValue(fmt='{avg:.4f}')
+        space_fmt = ":" + str(len(str(len(iterable)))) + "d"
+        if torch.cuda.is_available():
+            log_msg = self.delimiter.join([header,
+                                           '[{0' + space_fmt + '}/{1}]',
+                                           'eta: {eta}',
+                                           '{meters}',
+                                           'time: {time}',
+                                           'data: {data}',
+                                           'max mem: {memory:.0f}'])
+        else:
+            log_msg = self.delimiter.join([header,
+                                           '[{0' + space_fmt + '}/{1}]',
+                                           'eta: {eta}',
+                                           '{meters}',
+                                           'time: {time}',
+                                           'data: {data}'])
+        MB = 1024.0 * 1024.0
+        for obj in iterable:
+            data_time.update(time.time() - end)
+            yield obj
+            iter_time.update(time.time() - end)
+            if i % print_freq == 0 or i == len(iterable) - 1:
+                eta_second = int(iter_time.global_avg * (len(iterable) - i))
+                eta_string = str(datetime.timedelta(seconds=eta_second))
+                if torch.cuda.is_available():
+                    print(log_msg.format(i, len(iterable),
+                                         eta=eta_string,
+                                         meters=str(self),
+                                         time=str(iter_time),
+                                         data=str(data_time),
+                                         memory=torch.cuda.max_memory_allocated() / MB))
+                else:
+                    print(log_msg.format(i, len(iterable),
+                                         eta=eta_string,
+                                         meters=str(self),
+                                         time=str(iter_time),
+                                         data=str(data_time)))
+            i += 1
+            end = time.time()
+        total_time = time.time() - start_time
+        total_time_str = str(datetime.timedelta(seconds=int(total_time)))
+        print('{} Total time: {} ({:.4f} s / it)'.format(header,
+                                                         total_time_str,
+                                                         total_time / len(iterable)))
+
+
+def warmup_lr_scheduler(optimizer, warmup_iters, warmup_factor):
+
+    def f(x):
+       
+        if x >= warmup_iters:  
+            return 1
+        alpha = float(x) / warmup_iters
+      
+        # print(x, warmup_factor * (1 - alpha) + alpha)
+        return warmup_factor * (1 - alpha) + alpha
+
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=f)
+
+
+def mkdir(path):
+    try:
+        os.makedirs(path)
+    except OSError as e:
+        if e.errno != errno.EEXIST:
+            raise
+
+
+def setup_for_distributed(is_master):
+    """
+    This function disables when not in master process
+    """
+    import builtins as __builtin__
+    builtin_print = __builtin__.print
+
+    def print(*args, **kwargs):
+        force = kwargs.pop('force', False)
+        if is_master or force:
+            builtin_print(*args, **kwargs)
+
+    __builtin__.print = print
+
+
+def is_dist_avail_and_initialized():
+   
+    if not dist.is_available():
+        return False
+    if not dist.is_initialized():
+        return False
+    return True
+
+
+def get_world_size():
+    if not is_dist_avail_and_initialized():
+        return 1
+    return dist.get_world_size()
+
+
+def get_rank():
+    if not is_dist_avail_and_initialized():
+        return 0
+    return dist.get_rank()
+
+
+def is_main_process():
+    return get_rank() == 0
+
+
+def save_on_master(*args, **kwargs):
+    if is_main_process():
+        torch.save(*args, **kwargs)
+
+
+def init_distributed_mode(args):
+    if 'RANK' in os.environ and 'WORLD_SIZE' in os.environ:
+        args.rank = int(os.environ["RANK"])
+        args.world_size = int(os.environ['WORLD_SIZE'])
+        args.gpu = int(os.environ['LOCAL_RANK'])
+    elif 'SLURM_PROCID' in os.environ:
+        args.rank = int(os.environ['SLURM_PROCID'])
+        args.gpu = args.rank % torch.cuda.device_count()
+    else:
+        print('Not using distributed mode')
+        args.distributed = False
+        return
+
+    args.distributed = True
+
+    torch.cuda.set_device(args.gpu)
+    args.dist_backend = 'nccl'
+    print('| distributed init (rank {}): {}'.format(
+        args.rank, args.dist_url), flush=True)
+    torch.distributed.init_process_group(backend=args.dist_backend, init_method=args.dist_url,
+                                         world_size=args.world_size, rank=args.rank)
+    torch.distributed.barrier()
+    setup_for_distributed(args.rank == 0)
+
 
 def train_one_epoch(model, optimizer, data_loader, device, epoch, loss_pro,
                     print_freq=50, warmup=False, scaler=None):
     model.train()
-    metric_logger = utils.MetricLogger(delimiter="  ")
-    metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
+    metric_logger = MetricLogger(delimiter="  ")
+    metric_logger.add_meter('lr', SmoothedValue(window_size=1, fmt='{value:.6f}'))
     header = 'Epoch: [{}]'.format(epoch)
 
     # lr_scheduler = None
-    # if epoch == 0 and warmup is True:  # 当训练第一轮（epoch=0）时，启用warmup训练方式，可理解为热身训练
+    # if epoch == 0 and warmup is True: 
     #     warmup_factor = 1.0 / 1000
     #     warmup_iters = min(1000, len(data_loader) - 1)
 
@@ -38,22 +360,22 @@ def train_one_epoch(model, optimizer, data_loader, device, epoch, loss_pro,
 
         #     print(targets['img_path'])
 
-        # 混合精度训练上下文管理器，如果在CPU环境中不起任何作用
+       
         with torch.cuda.amp.autocast(enabled=scaler is not None):
             results = model(images)
 
             losses = mse(results,targets)
 
         # reduce losses over all GPUs for logging purpose
-        loss_dict_reduced = utils.reduce_dict({"losses": losses})
-        print(losses)
+        loss_dict_reduced = reduce_dict({"losses": losses})
+        #print(losses)
         losses_reduced = sum(loss for loss in loss_dict_reduced.values())
 
         loss_value = losses_reduced.item()
-        # 记录训练损失
+       
         mloss = (mloss * i + loss_value) / (i + 1)  # update mean losses
 
-        if not math.isfinite(loss_value):  # 当计算的损失为无穷大时停止训练
+        if not math.isfinite(loss_value):  
             print("Loss is {}, stopping training".format(loss_value))
             print(loss_dict_reduced)
             sys.exit(1)
@@ -70,17 +392,14 @@ def train_one_epoch(model, optimizer, data_loader, device, epoch, loss_pro,
         # current_lr = optimizer.param_groups[0]['lr']
         # print('current_lr:', current_lr)
 
-        # if lr_scheduler is not None:  # 第一轮使用warmup训练方式
+        # if lr_scheduler is not None:
         #     lr_scheduler.step()
         
 
         metric_logger.update(loss=losses_reduced)
         now_lr = optimizer.param_groups[0]["lr"]
         metric_logger.update(lr=now_lr)
-        #breakpoint()
-        # if i >= 2:
-        # torch.save(model.state_dict(), '/home/ubuntu/文档/python/leaf_angle/HRNet/111/2.pth')
-        # sys.exit()
+
 
     return mloss, now_lr
 
@@ -88,15 +407,13 @@ def train_one_epoch(model, optimizer, data_loader, device, epoch, loss_pro,
 @torch.no_grad()
 def evaluate(model, data_loader, device, loss_pro, flip=False, flip_pairs=None):
     # 读取真实值文件
-    df = pd.read_excel('/home/ubuntu/桌面/qy/leafangle/train_data_5.8_5.9_23.12.11_12.15标注的文件_郑老师挑选_乔义修改.xlsx')
-    Test = pd.read_excel('/home/ubuntu/桌面/标注文件/20240710ImagejLabel_true_leafangle.xlsx')
+    df = pd.read_excel('datasets/labels/labels.xlsx')
     df = df.sort_values(by='img_name')
-    df = pd.concat([df, Test])
     if flip:
         assert flip_pairs is not None, "enable flip must provide flip_pairs."
 
     model.eval()
-    metric_logger = utils.MetricLogger(delimiter="  ")
+    metric_logger = MetricLogger(delimiter="  ")
     header = "Test: "
     i = 0
     oks_all = 0
@@ -119,47 +436,8 @@ def evaluate(model, data_loader, device, loss_pro, flip=False, flip_pairs=None):
         mse = KpLoss_for_val()
         losses = mse(outputs, targets)
         loss_all +=losses
-        #计算叶夹角和R2
-        batch_size, num_joints, h, w = outputs.shape
-        heatmaps_reshaped = outputs.reshape(batch_size, num_joints, -1)
         
-        maxvals, idx = torch.max(heatmaps_reshaped, dim=2)
-        maxvals = maxvals[0]
-        maxvals = maxvals.cpu().detach().numpy()
-        # maxvals = maxvals.unsqueeze(dim=-1)
-        idx = idx.float()
-        x_v = idx[0] % w  # column 对应最大值的x坐标
-        y_v = torch.floor(idx[0] / w)  # row 对应最大值的y坐标
-        #torch.cat将数据拼接，dim代表拼接的维度，0代表行，1代表列
-        preds = torch.cat((x_v, y_v), dim=0)
-        predict = preds.clone()
-        predict = predict*torch.tensor(2)
-
-        # 计算向量 A 和 B 的点乘
-        if predict[5]-predict[4]<0:
-            vector_A = [predict[2]-predict[1], predict[5]-predict[4]]
-        else:
-            vector_A = [predict[1]-predict[2], predict[4]-predict[5]]
-        vector_B = [predict[0]-predict[1], predict[3]-predict[4]]
-        dot_product = sum(a * b for a, b in zip(vector_A, vector_B))
-
-        # 计算向量的长度
-        magnitude_A = math.sqrt(sum(a**2 for a in vector_A))
-        magnitude_B = math.sqrt(sum(b**2 for b in vector_B))
-
-        # 计算夹角的弧度值
-        cosine_similarity = dot_product / (magnitude_A * magnitude_B)
-        angle_radians = math.acos(cosine_similarity) #返回x的反余弦弧度值
-
-        # 将弧度转换为度数
-        angle_degrees = math.degrees(angle_radians)
-         # 将计算出的角度保存到predsall列表
-        predsall.append(angle_degrees)
-        imgPath= targets[0].get('img_path', None)  #读取文件名称
-        imgPaths.append(imgPath)
-        gts.extend(df.loc[df['img_path'] == imgPath, 't_angle'].values)
-
-        if flip: #翻转图片再运行一次，从而综合两张图片的预测结果
+        if flip:
             flipped_images = transforms.flip_images(images)
             flipped_outputs = model(flipped_images)
             flipped_outputs = transforms.flip_back(flipped_outputs, flip_pairs)
@@ -174,15 +452,9 @@ def evaluate(model, data_loader, device, loss_pro, flip=False, flip_pairs=None):
         reverse_trans = [t["reverse_trans"] for t in targets]
         outputs1 = transforms.get_final_preds(outputs, reverse_trans, post_processing=False)
         
-        target_keypoint = np.concatenate([target['keypoints_new'] for target in targets], axis=0).reshape((len(targets), 3, 2))#这里将4改成了3，在计算3个点的时候
-        # with open('/home/ubuntu/文档/python/leaf_angle/HRNet/save_weights/target_ouput.txt', "a") as f:
-        #     # 写入的数据包括coco指标还有loss和learning rate
-        #     txt1 = np.array2string(target_keypoint, separator=', ')
-        #     txt2 = np.array2string(outputs1[0], separator=', ')
-        #     f.write(txt1 + "\n")
-        #     f.write(txt2 + "\n")
-        # print('target:', target_keypoint, 'outputs1[0]:', outputs1[0])
-        e = np.sum((target_keypoint - outputs1[0])**2, axis=-1)/(2*images.shape[2]*images.shape[3]+np.spacing(1))#表示每个点的分数
+        target_keypoint = np.concatenate([target['keypoints_new'] for target in targets], axis=0).reshape((len(targets), 3, 2))
+
+        e = np.sum((target_keypoint - outputs1[0])**2, axis=-1)/(2*images.shape[2]*images.shape[3]+np.spacing(1))
         oks_all += np.sum(np.exp(-e))/(e.shape[-1])
 
         metric_logger.update(model_time=model_time)
@@ -195,18 +467,5 @@ def evaluate(model, data_loader, device, loss_pro, flip=False, flip_pairs=None):
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger)
-    #计算叶夹角和R2
-    # calc r2
-    r2 = -1  # 设置默认值为 -1（表示无法计算的情况）
-    rmse=-1
-    if not np.isnan(predsall).any():
-        r2 = r2_score(gts, predsall)  # 如果不存在 NaN，计算 r2
-        mse = mean_squared_error(gts, predsall)
-        rmse = np.sqrt(mse)
-    # dic=pd.DataFrame({'img_path':imgPaths,'gt':gts,'pred':predsall})
-    # dic.to_csv('/home/ubuntu/文档/python/leaf_angle/HRNet/result_5.9_1210.csv',index=False)
-    # save_files = {
-    #         'model': model.state_dict()
-    # }
-    # torch.save(save_files, "/home/ubuntu/文档/python/leaf_angle/HRNet/save_weights/test2.pth")
-    return [oks, mloss],r2,rmse
+
+    return [oks, mloss]
