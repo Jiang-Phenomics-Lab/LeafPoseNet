@@ -6,7 +6,7 @@ import torch
 import argparse
 import numpy as np
 import pandas as pd
-from nets.LANet import LANet
+from nets.LeafPoseNet import LeafPoseNet
 from tqdm import tqdm 
 
 def adjust_image(image, fixed_size):
@@ -32,7 +32,7 @@ def predict(args):
 
     # model loader
     device = torch.device(args.device if torch.cuda.is_available() else 'cpu')
-    model = LANet()
+    model = LeafPoseNet()
     weights = torch.load(args.model_path, map_location=device)
     weights = weights if "model" not in weights else weights["model"]
     model.load_state_dict(weights)
@@ -103,7 +103,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="LANet Image Prediction")
     parser.add_argument('--device', default='cuda:0', type=str, help='Device to use: "cuda:0" or "cpu"')
     parser.add_argument('--data-dir', type=str, default="datasets/images", help='Directory containing images to predict')
-    parser.add_argument('--model-path', type=str, default="weights/LANet_best.pth", help='Path to trained LANet model weights (.pth)')
+    parser.add_argument('--model-path', type=str, default="weights/best.pth", help='Path to trained LANet model weights (.pth)')
     parser.add_argument('--output-csv', type=str, default='output/predict_result.csv', help='Path to save output CSV')
     args = parser.parse_args()
 
