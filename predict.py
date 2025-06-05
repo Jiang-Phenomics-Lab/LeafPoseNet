@@ -25,7 +25,6 @@ def adjust_image(image, fixed_size):
     return new_image
 
 def predict(args):
-    # 参数
     mean = [0.501642, 0.517964, 0.514330]
     std = [0.139957, 0.155858, 0.153716]
     fixed_size = (768, 576)
