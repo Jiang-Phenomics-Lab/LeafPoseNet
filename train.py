@@ -5,7 +5,7 @@ import torch
 from torch.utils import data
 import numpy as np
 import argparse
-from nets.LANet import LANet
+from nets.LeafPoseNet import LeafPoseNet
 from utils.DatasetSeg import LeafKeypoint
 import utils.transforms as transforms
 from utils import utils
@@ -24,7 +24,7 @@ def get_random_seed(seed):
 #get_random_seed(66)
 get_random_seed(66)
 def create_model(load_pretrain_weights=False):
-    model = LANet()
+    model = LeafPoseNet()
     # weights = torch.load(weights_path)
     # weights = weights if "model" not in weights else weights["model"]
     # model.load_state_dict(weights)
