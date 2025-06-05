@@ -101,7 +101,7 @@ def predict(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="LANet Image Prediction")
     parser.add_argument('--device', default='cuda:0', type=str, help='Device to use: "cuda:0" or "cpu"')
-    parser.add_argument('--data-dir', type=str, default="datasets/images", help='Directory containing images to predict')
+    parser.add_argument('--data-dir', type=str, default="images/", help='Directory containing images to predict')
     parser.add_argument('--model-path', type=str, default="weights/best.pth", help='Path to trained LANet model weights (.pth)')
     parser.add_argument('--output-csv', type=str, default='output/predict_result.csv', help='Path to save output CSV')
     args = parser.parse_args()
