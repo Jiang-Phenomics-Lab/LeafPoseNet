@@ -36,6 +36,7 @@ The phenotyping method is in the `phenotypying.ipynb`
 Images collected in 2023 and 2024 are available for download at the following link:
 [https://1024terabox.com/s/1XzcIaxilrahdC-3xoJOLVg](https://1024terabox.com/s/1Z0rS-m-MDbEI9kl_nR2_Lw)
 
-
+## Model training strategies and runtime environment
+The LANetLeafPoseNet model was implemented in Python 3.8 using the Pytorch framework and trained on an NVIDIA 4080 GPU. The AdamW optimizer was used, with a learning rate warm-up by a cosine annealing strategy. The initial learning rate was set to 2 × 10-3, with a minimum learning rate of 1 × 10-6, and a batch size of 4. Training was conducted for a total of 500 epochs, and the model achieving the best accuracy on the validation set was selected as the final model. 
 
 
