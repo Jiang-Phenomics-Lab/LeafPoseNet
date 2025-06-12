@@ -22,15 +22,6 @@ Defines the `LeafKeypoint` dataset class for wheat flag leaf angle keypoint dete
 
 The annotation file is a tabular `.xlsx` file with the following columns:
 
-
-当然可以，以下是带有**列名+示例数据行**的 `README.md` 中展示格式，适配 markdown 规范，清晰美观：
-
----
-
-### Annotation Format (`labels.xlsx`)
-
-The annotation file is a tabular `.xlsx` file with the following columns:
-
 | img\_name               | num  | id    | img\_path                              | t\_angle | t\_x0 | t\_x1 | t\_x2 | t\_y0 | t\_y1 | t\_y2 |
 | ----------------------- | ---- | ----- | -------------------------------------- | -------- | ----- | ----- | ----- | ----- | ----- | ----- |
 | C001\_1\_20230508081541 | C001 | 1588B | /media/.../C001\_1\_20230508081541.jpg | 146.6695 | 1529  | 1723  | 1729  | 1818  | 1538  | 1290  |
