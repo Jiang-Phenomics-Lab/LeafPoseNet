@@ -18,7 +18,27 @@ Defines the `LeafKeypoint` dataset class for wheat flag leaf angle keypoint dete
 * Applies random HSV augmentation during training to enhance robustness
 * Supports custom transform pipelines and provides a `collate_fn` for PyTorch DataLoader compatibility
 
-**Keypoints format:**
-A NumPy array of shape (3×2):
-`[[leaf_tip_x, leaf_tip_y], [joint_x, joint_y], [stem_x, stem_y]]`
+### Annotation Format (`labels.xlsx`)
+
+The annotation file is a tabular `.xlsx` file with the following columns:
+
+
+当然可以，以下是带有**列名+示例数据行**的 `README.md` 中展示格式，适配 markdown 规范，清晰美观：
+
+---
+
+### Annotation Format (`labels.xlsx`)
+
+The annotation file is a tabular `.xlsx` file with the following columns:
+
+| img\_name               | num  | id    | img\_path                              | t\_angle | t\_x0 | t\_x1 | t\_x2 | t\_y0 | t\_y1 | t\_y2 |
+| ----------------------- | ---- | ----- | -------------------------------------- | -------- | ----- | ----- | ----- | ----- | ----- | ----- |
+| C001\_1\_20230508081541 | C001 | 1588B | /media/.../C001\_1\_20230508081541.jpg | 146.6695 | 1529  | 1723  | 1729  | 1818  | 1538  | 1290  |
+
+* `t_x0`, `t_y0`: Coordinates of the **leaf tip**
+* `t_x1`, `t_y1`: Coordinates of the **leaf joint**
+* `t_x2`, `t_y2`: Coordinates of the **leaf stem base**
+* `t_angle`: Flag leaf angle (in degrees)
+
+
 
