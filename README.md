@@ -48,7 +48,7 @@ The **LANetLeafPoseNet** model was implemented in **Python 3.8** using the **PyT
 * **Minimum Learning Rate**: `1 × 10⁻⁶`
 * **Batch Size**: `4`
 * **Epochs**: `500`
-* **Best Model Selection**: Based on highest validation accuracy
+* **Best Model Selection**: Based on lowest validation loss
 
 
 
