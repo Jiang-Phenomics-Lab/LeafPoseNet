@@ -26,9 +26,9 @@ The annotation file is a tabular `.xlsx` file with the following columns:
 | ----------------------- | ---- | ----- | -------------------------------------- | -------- | ----- | ----- | ----- | ----- | ----- | ----- |
 | C001\_1\_20230508081541 | C001 | 1588B | /media/.../C001\_1\_20230508081541.jpg | 146.6695 | 1529  | 1723  | 1729  | 1818  | 1538  | 1290  |
 
-* `t_x0`, `t_y0`: Coordinates of the **leaf tip**
-* `t_x1`, `t_y1`: Coordinates of the **leaf joint**
-* `t_x2`, `t_y2`: Coordinates of the **leaf stem base**
+* `t_x0`, `t_y0`: Coordinates of the **leaf**
+* `t_x1`, `t_y1`: Coordinates of the **joint**
+* `t_x2`, `t_y2`: Coordinates of the **stem**
 * `t_angle`: Flag leaf angle (in degrees)
 
 
