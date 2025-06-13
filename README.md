@@ -36,11 +36,11 @@ The phenotyping method is in the `phenotypying.ipynb`
 Images collected in 2023 and 2024 are available for download at the following link:
 [https://1024terabox.com/s/1XzcIaxilrahdC-3xoJOLVg](https://1024terabox.com/s/1Z0rS-m-MDbEI9kl_nR2_Lw)
 
-## 🧠 Model Training Details
+##  Model Training Details
 
 The **LANetLeafPoseNet** model was implemented in **Python 3.8** using the **PyTorch** framework and trained on an **NVIDIA RTX 4080 GPU**.
 
-### ⚙️ Training Configuration
+###  Training Configuration
 
 * **Optimizer**: AdamW
 * **Learning Rate Schedule**: Cosine annealing with warm-up
