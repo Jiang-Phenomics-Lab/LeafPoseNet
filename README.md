@@ -33,7 +33,7 @@ python predict.py
 The phenotyping method is in the `phenotypying.ipynb` 
 
 ## Datasets
-Images collected in 2023 and 2024 are available for download at the following link:
+The complete dataset collected is available for download at the following link:
 [https://1024terabox.com/s/1XzcIaxilrahdC-3xoJOLVg](https://1024terabox.com/s/1Z0rS-m-MDbEI9kl_nR2_Lw)
 
 ##  Model Training Details
