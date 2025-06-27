@@ -19,7 +19,7 @@ Install dependencies using pip
 pip install -r requirements.txt
 ```
 
-## Train:
+## Train
 `train.py` is used to train segmentation models
 ```bash
 python train.py
